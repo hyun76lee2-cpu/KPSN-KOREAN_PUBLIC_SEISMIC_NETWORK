@@ -1,0 +1,54 @@
+{
+  "rules": {
+    "stations": {
+      ".read": true,
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid",
+        "info": {
+          ".validate": "newData.hasChildren(['name', 'lat', 'lon']) && newData.child('name').isString() && newData.child('name').val().length <= 24 && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lon').isNumber() && newData.child('lon').val() >= -180 && newData.child('lon').val() <= 180",
+          "name": {
+            ".validate": true
+          },
+          "lat": {
+            ".validate": true
+          },
+          "lon": {
+            ".validate": true
+          },
+          "sensor": {
+            ".validate": "newData.isString() && newData.val().length <= 24"
+          },
+          "noise": {
+            ".validate": "newData.isBoolean()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "live": {
+          ".validate": "newData.hasChildren(['v', 't']) && newData.child('t').isNumber() && newData.child('t').val() <= now + 10000",
+          "v": {
+            "$i": {
+              ".validate": "$i.matches(/^[0-3]$/) && newData.isNumber() && newData.val() >= 0 && newData.val() <= 11"
+            }
+          },
+          "T": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10.5"
+          },
+          "t": {
+            ".validate": true
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "online": {
+          ".validate": "newData.isBoolean()"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}
