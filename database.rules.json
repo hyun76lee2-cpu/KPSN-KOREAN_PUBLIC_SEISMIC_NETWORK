@@ -26,10 +26,10 @@
           }
         },
         "live": {
-          ".validate": "newData.hasChildren(['v', 't']) && newData.child('t').isNumber() && newData.child('t').val() <= now + 10000",
-          "v": {
+          ".validate": "newData.hasChildren(['c', 't']) && newData.child('t').isNumber() && newData.child('t').val() <= now + 10000",
+          "c": {
             "$i": {
-              ".validate": "$i.matches(/^[0-3]$/) && newData.isNumber() && newData.val() >= 0 && newData.val() <= 11"
+              ".validate": "$i.matches(/^[0-3]$/) && newData.isNumber() && newData.val() >= 0 && newData.val() <= 10 && newData.val() % 1 === 0"
             }
           },
           "T": {

@@ -99,7 +99,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
     </details>
   </section>
 
-  <footer>값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 30초 넘게 갱신이 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
+  <footer>정수 계급이 바뀔 때만 그 값을 올려요. 값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 2분 30초 넘게 신호가 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -125,6 +125,15 @@ function chip(f, sub) {
   const c = classOf(f);
   return `<span class="chip on${c >= 8 ? " light" : ""}" style="background:${MMI_COLORS[c]}">${CLASSES[c]}</span><div class="s">${fmtFrac(f)}${sub ? " " + sub : ""}</div>`;
 }
+// 공유되는 값은 정수 계급: 0 = 잡음 이하, 1~10 = I~X+
+function chipC(c) {
+  if (c === null || c === undefined) return `<span class="chip off">–</span>`;
+  if (!(c > 0)) return `<span class="chip off">–</span><div class="s">잡음 이하</div>`;
+  const i = Math.min(9, c - 1);
+  return `<span class="chip on${i >= 8 ? " light" : ""}" style="background:${MMI_COLORS[i]}">${CLASSES[i]}</span>`;
+}
+function cAt(c, i) { return c ? (Array.isArray(c) ? c[i] : c[String(i)]) : null; }
+function valsC(c, T) { return KEYS.map((k, i) => `<div class="v"><div class="k">${k}</div>${chipC(cAt(c, i))}${i === 3 && T && cAt(c, 3) > 0 ? `<div class="s">@${T < 1 ? T.toFixed(2) : T.toFixed(1)}초</div>` : ""}</div>`).join(""); }
 function vals(v, T) { return KEYS.map((k, i) => `<div class="v"><div class="k">${k}</div>${chip(v ? v[i] : null, i === 3 && T ? "@" + (T < 1 ? T.toFixed(2) : T.toFixed(1)) + "초" : "")}</div>`).join(""); }
 function ago(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}초 전` : s < 3600 ? `${Math.round(s / 60)}분 전` : `${Math.round(s / 3600)}시간 전`; }
 $("mine").innerHTML = vals(null);
@@ -153,6 +162,8 @@ $("pick").addEventListener("click", () => { picking = true; $("posText").textCon
 map.on("click", e => { if (!picking) return; picking = false; setPos(e.latlng.lat, e.latlng.lng); });
 
 /* ---------- 관측소 목록과 지도 표시 ---------- */
+// 값은 계급이 바뀔 때만 오고, 바뀌지 않아도 1분마다 살아 있다는 신호(t)가 와요
+const LIVE_MS = 150000, BEAT_MS = 60000;
 let stations = {}, offset = 0, renderPending = false;
 onValue(ref(db, ".info/serverTimeOffset"), s => { offset = s.val() || 0; });
 onValue(ref(db, "stations"), snap => { stations = snap.val() || {}; scheduleRender(); }, () => { $("listEmpty").textContent = "관측소 목록을 불러오지 못했어요. 설정(firebase-config.js)을 확인해 주세요."; });
@@ -165,24 +176,24 @@ function render() {
     if (!info || typeof info.lat !== "number" || typeof info.lon !== "number") continue;
     const t = live && typeof live.t === "number" ? live.t : 0, age = now - t;
     if (!t || age > 24 * 3600 * 1000) continue;
-    const isLive = s.online !== false && age < 30000;
-    items.push({ id, info, v: live.v, T: live.T, age, isLive });
+    const isLive = s.online !== false && age < LIVE_MS;
+    items.push({ id, info, c: live.c, T: live.T, age, isLive });
   }
-  items.sort((a, b) => (b.isLive - a.isLive) || ((b.v ? b.v[3] : 0) - (a.v ? a.v[3] : 0)));
+  items.sort((a, b) => (b.isLive - a.isLive) || ((cAt(b.c, 3) || 0) - (cAt(a.c, 3) || 0)));
   $("count").textContent = items.length ? `(${items.filter(i => i.isLive).length}곳 실시간 / ${items.length}곳)` : "";
   const list = $("list"); list.innerHTML = items.length ? "" : '<div class="empty">아직 참여한 관측소가 없어요.</div>';
   for (const it of items) {
     seen.add(it.id);
-    const rep = it.v ? it.v[3] : 0, c = rep > 0 ? classOf(rep) : -1;
+    const rc = cAt(it.c, 3) || 0, c = rc > 0 ? Math.min(9, rc - 1) : -1;
     const color = it.isLive && c >= 0 ? MMI_COLORS[c] : "#9aa5ae";
     let m = markers.get(it.id);
     const tip = `<b>${esc(it.info.name || "이름 없음")}</b><br>${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}<br>` +
-      KEYS.map((k, i) => `${k} ${it.v && it.v[i] > 0 ? CLASSES[classOf(it.v[i])] + " " + fmtFrac(it.v[i]) : "–"}`).join("<br>");
+      KEYS.map((k, i) => `${k} ${cAt(it.c, i) > 0 ? CLASSES[Math.min(9, cAt(it.c, i) - 1)] : "–"}`).join("<br>");
     if (!m) { m = L.circleMarker([it.info.lat, it.info.lon], { radius: 9, weight: 1, color: "#333", fillColor: color, fillOpacity: .9 }).addTo(map).bindTooltip(tip); markers.set(it.id, m); }
     else { m.setLatLng([it.info.lat, it.info.lon]); m.setStyle({ fillColor: color, radius: it.isLive ? 9 : 6 }); m.setTooltipContent(tip); }
     const card = document.createElement("div"); card.className = "card";
     card.innerHTML = `<div class="h"><span class="name"><span class="dot${it.isLive ? " live" : ""}"></span>${esc(it.info.name || "이름 없음")}${it.id === myUid ? " (나)" : ""}</span>
-      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${vals(it.v, it.T)}</div>`;
+      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${valsC(it.c, it.T)}</div>`;
     card.addEventListener("click", () => map.setView([it.info.lat, it.info.lon], Math.max(map.getZoom(), 10)));
     list.appendChild(card);
   }
@@ -199,7 +210,7 @@ $("src").addEventListener("change", () => { $("csvBox").style.display = $("src")
 
 async function publishInfo() {
   const cred = auth.currentUser || (await signInAnonymously(auth)).user;
-  myUid = cred.uid;
+  myUid = cred.uid; lastSent = null; sentCount = 0;
   const base = ref(db, "stations/" + myUid);
   await set(ref(db, `stations/${myUid}/info`), { name: ($("name").value.trim() || "이름 없음").slice(0, 24), lat: myPos.lat, lon: myPos.lon,
     sensor: running === "csv" ? "CSV 재생" : "폰", noise: !!noise });
@@ -207,11 +218,25 @@ async function publishInfo() {
   onDisconnect(ref(db, `stations/${myUid}/online`)).set(false);
   return base;
 }
-let sending = false;
+let sending = false, lastSent = null, lastBeat = 0, sentCount = 0;
+function toClass(f) { return f > 0 ? classOf(f) + 1 : 0; }   // 0 = 잡음 이하, 1~10 = I~X+
 function sendLive(r) {
   if (!myUid || sending) return;
+  const cls = r.v.map(toClass), T = Math.round(r.T * 100) / 100, now = Date.now();
+  let task;
+  if (!lastSent) {          // 처음엔 전체를 한 번
+    task = set(ref(db, `stations/${myUid}/live`), { c: cls, T, t: serverTimestamp() });
+  } else {
+    const upd = {};
+    cls.forEach((c, i) => { if (c !== lastSent[i]) upd[`live/c/${i}`] = c; });
+    if (upd["live/c/3"] !== undefined) upd["live/T"] = T;
+    if (!Object.keys(upd).length && now - lastBeat < BEAT_MS) return;   // 바뀐 것도 없고 생존 신호 때도 아님
+    upd["live/t"] = serverTimestamp();
+    task = update(ref(db, `stations/${myUid}`), upd);
+  }
   sending = true;
-  set(ref(db, `stations/${myUid}/live`), { v: r.v.map(round2), T: round2(r.T), t: serverTimestamp() })
+  const snapshot = cls.slice();
+  task.then(() => { lastSent = snapshot; lastBeat = now; sentCount++; })
     .catch(e => { $("status").textContent = "올리기 실패: " + (e.code || e.message); })
     .finally(() => { sending = false; });
 }
@@ -236,7 +261,7 @@ async function startSensor() {
     const n = rawCount - last; last = rawCount; silent = n ? 0 : silent + 1;
     if (silent >= 3) { stop(); $("status").textContent = "센서 값이 들어오지 않아요. 이 브라우저가 동작 센서를 막고 있는지 확인해 주세요."; return; }
     second();
-    if (n && calib === null) $("status").textContent = `센서 ${n} Hz 수신, 1초마다 올리는 중` + (noise ? "" : " (잡음 측정 전이라 값이 부풀 수 있어요)");
+    if (n && calib === null) $("status").textContent = `센서 ${n} Hz 수신, 계급이 바뀔 때만 올리는 중 (지금까지 ${sentCount}회)` + (noise ? "" : ". 잡음 측정 전이라 값이 부풀 수 있어요");
     if (calib !== null) $("status").textContent = `잡음 측정 중… ${Math.max(0, Math.ceil(30 - (total - calib) / FS))}초 남음. 움직이지 말아 주세요`;
   }, 1000);
   $("cal").disabled = false;
@@ -251,7 +276,7 @@ function startCsv(d) {
     cur = upto;
     const r = computeIMM(null);
     if (r) { $("mine").innerHTML = vals(r.v, r.T); sendLive(r); }
-    $("status").textContent = `CSV 재생 중 ${Math.min(cur, d.dur).toFixed(0)} / ${d.dur.toFixed(0)}초, 1초마다 올리는 중`;
+    $("status").textContent = `CSV 재생 중 ${Math.min(cur, d.dur).toFixed(0)} / ${d.dur.toFixed(0)}초, 계급이 바뀔 때만 올림 (${sentCount}회)`;
     if (cur >= d.dur + 5) { stop(); $("status").textContent = "재생이 끝났어요."; }
   }, 1000 / Number($("speed").value));
 }
