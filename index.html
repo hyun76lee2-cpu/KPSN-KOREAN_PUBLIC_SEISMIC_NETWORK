@@ -13,7 +13,7 @@
 <meta property="og:url" content="https://hyun76lee2-cpu.github.io/KPSN-KOREAN_PUBLIC_SEISMIC_NETWORK/">
 <!-- 검색 등록 확인 태그: 각 서비스에서 받은 값으로 아래 줄을 바꾸고 주석을 풀어 주세요 -->
 <!-- <meta name="google-site-verification" content="구글에서 받은 값"> -->
-<meta name="naver-site-verification" content="dceb9b58e7a194994630a0a05d7d5e5f9f9beda7" />
+<!-- <meta name="naver-site-verification" content="네이버에서 받은 값"> -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -113,7 +113,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
           <button class="primary" id="go">참여 시작</button>
           <button id="cal" disabled>잡음 측정 (30초)</button>
         </div>
-        <p class="note" id="status">참여하면 관측소 이름, 대략적 위치, 1초 IMM 값이 누구에게나 공개돼요. 폰은 바닥에 테이프로 고정하고, 처음 한 번 조용할 때 잡음 측정을 해 주세요.</p>
+        <p class="note" id="status">참여하면 관측소 이름, 대략적 위치, 1초 IMM 값이 누구에게나 공개돼요. 폰은 바닥에 테이프로 고정하고, 처음 한 번 조용할 때 잡음 측정을 해 주세요. 참여 중에는 화면이 켜진 채로 유지되고, 이 탭을 계속 띄워 둬야 측정돼요.</p>
         <div class="vals" id="mine"></div>
       </div>
     </details>
@@ -312,6 +312,19 @@ function second() {
   $("mine").innerHTML = vals(r.v, r.T);
   if (calib === null) sendLive(r);
 }
+/* 참여 중에는 화면이 꺼지지 않게 한다 (화면이 꺼지면 브라우저가 센서 값을 멈춘다) */
+let wakeLock = null;
+async function keepAwake() {
+  if (!("wakeLock" in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch (e) { /* 절전 모드 등으로 거부되면 그냥 진행 */ }
+}
+function releaseAwake() { if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; } }
+// 다른 앱을 봤다가 돌아오면 잠금이 풀려 있으니 다시 건다
+document.addEventListener("visibilitychange", () => { if (running && document.visibilityState === "visible") keepAwake(); });
+
 function onMotion(e) { const a = e.accelerationIncludingGravity; if (!a || a.x === null || a.x === undefined) return; rawCount++; pushRaw((e.timeStamp || performance.now()) / 1000, a.x * 100, a.y * 100, a.z * 100); }
 async function startSensor() {
   try { if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") { if ((await DeviceMotionEvent.requestPermission()) !== "granted") throw new Error(); } }
@@ -326,10 +339,12 @@ async function startSensor() {
     if (calib !== null) $("status").textContent = `잡음 측정 중… ${Math.max(0, Math.ceil(30 - (total - calib) / FS))}초 남음. 움직이지 말아 주세요`;
   }, 1000);
   $("cal").disabled = false; $("t1Measure").disabled = false;
+  keepAwake();
   return true;
 }
 function stop() {
   clearInterval(timer); timer = null;
+  releaseAwake();
   if (sensorOn) { window.removeEventListener("devicemotion", onMotion); sensorOn = false; }
   running = null; calib = null;
   $("go").textContent = "참여 시작"; $("go").classList.add("primary"); $("cal").disabled = true; $("t1Measure").disabled = true;
