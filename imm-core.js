@@ -68,6 +68,55 @@ function peakFor(g, Lw, from) {
 // 최근 40초 창 → [IMM_(0.2,0.5), IMM_(0.5,1.5), IMM_(1.5,7.5), 대표 IMM] 소수 진도와 대표 주기 T*
 // noise: 주기별 잡음 바닥(TS와 같은 길이). 그 1.5배를 넘지 못한 주기는 판정에서 뺀다. 모두 빠지면 0 (잡음 이하)
 const NOISE_MARGIN = 1.5;
+
+/* 건물 보정: 균일 전단 기둥 1~5차 모드로 지금 층의 수평 증폭 H(f)를 계산해 나눈다 (역보정 최대 3배) */
+const bld = { on: false, top: 25, cur: 20, T1: null, zeta: 5 };
+let HinvR = null, HinvI = null;
+function estT1(top) { return 0.0488 * Math.pow(2.8 * top, 0.75); }   // 국내 벽식 아파트 기준식 (층고 2.8 m)
+function bldT1() { return bld.T1 || estT1(bld.top); }
+function bldH(fa) {
+  const T1 = bldT1(), z = bld.zeta / 100, zr = Math.max(0, Math.min(1, (bld.cur - 1) / bld.top));
+  let hr = 1, hi = 0;
+  if (fa > 0) for (let n = 1; n <= 5; n++) {
+    const m = 2 * n - 1, r = fa * T1 / m, G = 4 * (n % 2 ? 1 : -1) / (m * Math.PI), ph = Math.sin(m * Math.PI * zr / 2);
+    const a = 1 - r * r, b = 2 * z * r, d2 = a * a + b * b, c = G * ph * r * r / d2;
+    hr += c * a; hi -= c * b;
+  }
+  return [hr, hi];
+}
+function buildHinv() {
+  if (!bld.on) { HinvR = HinvI = null; return; }
+  HinvR = new Float64Array(N); HinvI = new Float64Array(N);
+  for (let k = 0; k < N; k++) {
+    const sf = (k <= N / 2 ? k : k - N) * FS / N;
+    let [hr, hi] = bldH(Math.abs(sf)); if (sf < 0) hi = -hi;
+    const d = hr * hr + hi * hi; let ir = hr / d, ii = -hi / d;
+    const mg = Math.sqrt(ir * ir + ii * ii); if (mg > 3) { ir *= 3 / mg; ii *= 3 / mg; }
+    HinvR[k] = ir; HinvI[k] = ii;
+  }
+}
+// 조용할 때 수평 미세진동 스펙트럼의 0.15~3 Hz 봉우리 → 건물 고유주기 (20초 이상 데이터 필요)
+function measureT1() {
+  const Lw = Math.min(total, W); if (Lw < 20 * FS) return null;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let c = 0; c < 2; c++) {
+    const a = new Float64Array(Lw); for (let k = 0; k < Lw; k++) a[k] = BUF[c][(wi - Lw + k + W) % W];
+    let st = 0, sx = 0, stt = 0, stx = 0; for (let k = 0; k < Lw; k++) { st += k; sx += a[k]; stt += k * k; stx += k * a[k]; }
+    const sl = (Lw * stx - st * sx) / (Lw * stt - st * st), ic = (sx - sl * st) / Lw;
+    for (let k = 0; k < Lw; k++) (c ? im : re)[k] = a[k] - ic - sl * k;
+  }
+  fft(re, im, false);
+  const P = new Float64Array(N / 2);
+  for (let k = 1; k < N / 2; k++) P[k] = (re[k] ** 2 + im[k] ** 2 + re[N - k] ** 2 + im[N - k] ** 2) / 2;
+  const S = new Float64Array(N / 2);
+  for (let k = 3; k < N / 2 - 3; k++) { let q = 0; for (let j = -2; j <= 2; j++) q += P[k + j]; S[k] = q / 5; }
+  const k0 = Math.ceil(0.15 * N / FS), k1 = Math.floor(3 * N / FS);
+  let kb = k0; for (let k = k0; k <= k1; k++) if (S[k] > S[kb]) kb = k;
+  const band = Array.from(S.slice(k0, k1 + 1)).sort((a, b) => a - b), med = band[band.length >> 1];
+  if (!(S[kb] > 4 * med) || kb === k0 || kb === k1) return null;
+  const y0 = S[kb - 1], y1 = S[kb], y2 = S[kb + 1], dk = (y0 - y2) / (2 * (y0 - 2 * y1 + y2)) || 0;
+  return { T: 1 / ((kb + dk) * FS / N), ratio: S[kb] / med };
+}
 function noiseAt(arr, T) {
   if (!arr) return null;
   if (T <= TS[0]) return arr[0];
@@ -88,6 +137,9 @@ function computeIMM(noise) {
   }
   for (let k = 0; k < Lw; k++) { R1[k] = xs[0][k]; I1[k] = xs[1][k]; R2[k] = xs[2][k]; }
   fft(R1, I1, false); fft(R2, I2, false);
+  if (HinvR) for (let k = 0; k < N; k++) {   // 수평(x+iy)만 건물 증폭을 나눈다
+    const r = R1[k] * HinvR[k] - I1[k] * HinvI[k], i = R1[k] * HinvI[k] + I1[k] * HinvR[k]; R1[k] = r; I1[k] = i;
+  }
   const from = Math.floor(Lw * 0.05);
   const A = GAINS.map(g => peakFor(g, Lw, from)), E = EGAINS.map(g => peakFor(g, Lw, from));
   const ok = (a, n) => !(n !== null && n !== undefined && a < NOISE_MARGIN * n);

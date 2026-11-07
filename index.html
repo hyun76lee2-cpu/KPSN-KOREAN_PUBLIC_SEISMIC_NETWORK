@@ -72,6 +72,11 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
 <main>
   <section>
     <h2>관측소 <span class="meta" id="count"></span></h2>
+    <div class="row" style="margin:0 0 10px">
+      <label class="meta" style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="showManual"> 직접 입력 위치 관측소도 보기</label>
+      <label class="meta" style="display:flex; gap:6px; align-items:center">오프라인 관측소 숨기기
+        <select id="hideAfter" style="width:auto"><option value="0">즉시</option><option value="600000">10분 뒤</option><option value="3600000">1시간 뒤</option><option value="21600000">6시간 뒤</option><option value="86400000">24시간 뒤</option></select></label>
+    </div>
     <div class="list" id="list"><div class="empty" id="listEmpty">불러오는 중…</div></div>
   </section>
 
@@ -81,9 +86,18 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
       <div class="card" style="margin-top:10px">
         <div class="grid">
           <div><label class="f" for="name">관측소 이름</label><input type="text" id="name" maxlength="24" placeholder="예: 12층 거실"></div>
-          <div><label class="f">위치 (약 1 km 단위로 반올림해서 올려요)</label>
-            <div class="row" style="margin-top:0"><button id="geo">현재 위치</button><button id="pick">지도에서 찍기</button></div>
-            <div class="meta" id="posText">위치를 아직 정하지 않았어요</div></div>
+          <div><label class="f">위치</label>
+            <div class="meta" id="posText">참여를 시작하면 이 기기의 현재 위치를 확인해서, 약 1 km 단위로 반올림해 올려요.</div></div>
+        </div>
+        <div style="margin-top:12px">
+          <label class="f" style="display:flex; gap:8px; align-items:center; font-size:14px; color:var(--ink)"><input type="checkbox" id="bldOn"> 건물 층수 보정 (건물 증폭을 빼고 지반 기준으로 올리기)</label>
+          <div class="grid" id="bldBox" style="margin-top:6px">
+            <div><label class="f" for="bldTop">최고 층수</label><input type="text" id="bldTop" inputmode="numeric" maxlength="3"></div>
+            <div><label class="f" for="bldCur">지금 있는 층</label><input type="text" id="bldCur" inputmode="numeric" maxlength="3"></div>
+            <div><label class="f" for="bldT1">건물 고유주기 T₁ (초)</label><input type="text" id="bldT1" inputmode="decimal" maxlength="5"></div>
+            <div><label class="f">&nbsp;</label><button id="t1Measure" disabled>고유주기 측정 (조용할 때)</button></div>
+          </div>
+          <p class="note" id="bldInfo"></p>
         </div>
         <div class="row">
           <button class="primary" id="go">참여 시작</button>
@@ -95,7 +109,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
     </details>
   </section>
 
-  <footer>정수 계급이 바뀔 때만 그 값을 올려요. 값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 2분 30초 넘게 신호가 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
+  <footer>정수 계급이 바뀔 때만 그 값을 올려요. 층수 보정을 켠 관측소는 건물 증폭을 뺀 지반 추정값이에요. 값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 2분 30초 넘게 신호가 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -138,28 +152,33 @@ $("mine").innerHTML = vals(null);
 const map = L.map("map", { zoomControl: true }).setView([36.3, 127.8], 7);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 16, attribution: "© OpenStreetMap 기여자" }).addTo(map);
 const markers = new Map();
-let picking = false, myPos = null, myMarker = null;
-const saved = ls.get("immSitePos"); if (saved) { try { myPos = JSON.parse(saved); } catch (e) {} }
+// 위치는 손으로 정할 수 없고, 참여할 때마다 이 기기의 현재 위치를 새로 받아 약 1 km 단위로 반올림해 쓴다
+let myPos = null, myMarker = null;
 function round2(x) { return Math.round(x * 100) / 100; }
 function setPos(lat, lon) {
   myPos = { lat: round2(lat), lon: round2(lon) };
-  ls.set("immSitePos", JSON.stringify(myPos));
-  $("posText").textContent = `위도 ${myPos.lat.toFixed(2)}, 경도 ${myPos.lon.toFixed(2)} (약 1 km 단위)`;
+  $("posText").textContent = `위도 ${myPos.lat.toFixed(2)}, 경도 ${myPos.lon.toFixed(2)} (이 기기의 현재 위치, 약 1 km 단위)`;
   if (!myMarker) myMarker = L.circleMarker([myPos.lat, myPos.lon], { radius: 6, color: "#1f4fb8", weight: 2, fillOpacity: 0 }).addTo(map);
   else myMarker.setLatLng([myPos.lat, myPos.lon]);
 }
-if (myPos) setPos(myPos.lat, myPos.lon);
-$("geo").addEventListener("click", () => {
-  if (!navigator.geolocation) { $("posText").textContent = "이 브라우저는 위치를 알려주지 않아요. 지도에서 찍어 주세요."; return; }
-  navigator.geolocation.getCurrentPosition(p => { setPos(p.coords.latitude, p.coords.longitude); map.setView([myPos.lat, myPos.lon], 11); },
-    () => { $("posText").textContent = "위치 권한을 받지 못했어요. 지도에서 찍어 주세요."; }, { enableHighAccuracy: false, timeout: 10000 });
-});
-$("pick").addEventListener("click", () => { picking = true; $("posText").textContent = "지도에서 내 위치 근처를 눌러 주세요"; document.getElementById("map").scrollIntoView({ behavior: "smooth" }); });
-map.on("click", e => { if (!picking) return; picking = false; setPos(e.latlng.lat, e.latlng.lng); });
+function getMyPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error("이 브라우저는 위치를 알려주지 않아요")); return; }
+    navigator.geolocation.getCurrentPosition(p => resolve(p.coords),
+      e => reject(new Error(e.code === 1 ? "위치 권한을 허용해야 참여할 수 있어요" : "현재 위치를 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요")),
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+  });
+}
 
 /* ---------- 관측소 목록과 지도 표시 ---------- */
 // 값은 계급이 바뀔 때만 오고, 바뀌지 않아도 1분마다 살아 있다는 신호(t)가 와요
 const LIVE_MS = 150000, BEAT_MS = 60000;
+$("showManual").checked = ls.get("immSiteShowManual") === "1";
+$("hideAfter").value = ls.get("immSiteHideAfter") || "86400000";
+$("showManual").addEventListener("change", () => { ls.set("immSiteShowManual", $("showManual").checked ? "1" : "0"); render(); });
+$("hideAfter").addEventListener("change", () => { ls.set("immSiteHideAfter", $("hideAfter").value); render(); });
+// 위치 출처: 폰은 기기 위치(gps), 컴퓨터는 설정 파일에 직접 입력한 위치(manual). 예전 기록은 센서 종류로 추정
+function locOf(info) { return info.loc || (info.sensor === "폰" ? "gps" : "manual"); }
 let stations = {}, offset = 0, renderPending = false;
 onValue(ref(db, ".info/serverTimeOffset"), s => { offset = s.val() || 0; });
 onValue(ref(db, "stations"), snap => { stations = snap.val() || {}; scheduleRender(); }, () => { $("listEmpty").textContent = "관측소 목록을 불러오지 못했어요. 설정(firebase-config.js)을 확인해 주세요."; });
@@ -173,6 +192,11 @@ function render() {
     const t = live && typeof live.t === "number" ? live.t : 0, age = now - t;
     if (!t || age > 24 * 3600 * 1000) continue;
     const isLive = s.online !== false && age < LIVE_MS;
+    if (locOf(info) === "manual" && !$("showManual").checked && id !== myUid) continue;
+    if (!isLive && id !== myUid) {   // 오프라인이 된 뒤 정한 시간이 지나면 숨김 (즉시 = 0)
+      const offFor = Math.max(0, age - (s.online === false ? 0 : LIVE_MS));
+      if (offFor >= Number($("hideAfter").value)) continue;
+    }
     items.push({ id, info, c: live.c, T: live.T, age, isLive });
   }
   items.sort((a, b) => (b.isLive - a.isLive) || ((cAt(b.c, 3) || 0) - (cAt(a.c, 3) || 0)));
@@ -189,7 +213,7 @@ function render() {
     else { m.setLatLng([it.info.lat, it.info.lon]); m.setStyle({ fillColor: color, radius: it.isLive ? 9 : 6 }); m.setTooltipContent(tip); }
     const card = document.createElement("div"); card.className = "card";
     card.innerHTML = `<div class="h"><span class="name"><span class="dot${it.isLive ? " live" : ""}"></span>${esc(it.info.name || "이름 없음")}${it.id === myUid ? " (나)" : ""}</span>
-      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${valsC(it.c, it.T)}</div>`;
+      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.bld ? " · 지반 추정 (" + esc(it.info.bld) + ")" : ""}${locOf(it.info) === "manual" ? " · 직접 입력 위치" : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${valsC(it.c, it.T)}</div>`;
     card.addEventListener("click", () => map.setView([it.info.lat, it.info.lon], Math.max(map.getZoom(), 10)));
     list.appendChild(card);
   }
@@ -203,12 +227,37 @@ let calib = null;
 $("name").value = ls.get("immSiteName") || "";
 $("name").addEventListener("change", () => ls.set("immSiteName", $("name").value.trim()));
 
+/* ---------- 층수 보정 (폰 센서) ---------- */
+try { const b = JSON.parse(ls.get("immSiteBld") || "null"); if (b) Object.assign(bld, b); } catch (e) {}
+function bldLabel() { return bld.on ? `${bld.cur}/${bld.top}층` : ""; }
+function syncBld() {
+  $("bldOn").checked = bld.on; $("bldTop").value = bld.top; $("bldCur").value = bld.cur; $("bldT1").value = bldT1().toFixed(2);
+  $("bldBox").style.display = bld.on ? "" : "none";
+  const [hr, hi] = bldH(1 / bldT1());
+  $("bldInfo").textContent = bld.on ? `T₁ ${bldT1().toFixed(2)}초 (${bld.T1 ? "입력·측정값" : "층수 기준식, 조용할 때 측정 권장"}). 이 층은 T₁ 흔들림을 지반의 약 ${Math.hypot(hr, hi).toFixed(1)}배로 받는 걸로 계산해요.` : "";
+}
+function bldChanged() {
+  ls.set("immSiteBld", JSON.stringify(bld)); buildHinv(); syncBld();
+  if (myUid && running) { lastSent = null; update(ref(db, `stations/${myUid}/info`), { bld: bldLabel() }).catch(() => {}); }
+}
+$("bldOn").addEventListener("change", () => { bld.on = $("bldOn").checked; bldChanged(); });
+$("bldTop").addEventListener("change", () => { const v = Math.round(Number($("bldTop").value)); if (v >= 2 && v <= 200) { bld.top = v; if (bld.cur > v) bld.cur = v; } bldChanged(); });
+$("bldCur").addEventListener("change", () => { const v = Math.round(Number($("bldCur").value)); if (v >= 1) bld.cur = Math.min(v, bld.top); bldChanged(); });
+$("bldT1").addEventListener("change", () => { const v = Number($("bldT1").value); if (v >= 0.1 && v <= 10) bld.T1 = v; bldChanged(); });
+$("t1Measure").addEventListener("click", () => {
+  const r = measureT1();
+  if (!r) { $("bldInfo").textContent = "뚜렷한 고유주기를 찾지 못했어요. 20초 이상 측정한 뒤, 조용할 때 다시 눌러 주세요."; return; }
+  bld.T1 = Math.round(r.T * 100) / 100; bldChanged();
+  $("bldInfo").textContent = `측정한 고유주기 ${bld.T1.toFixed(2)}초로 설정했어요. ` + $("bldInfo").textContent;
+});
+buildHinv(); syncBld();
+
 async function publishInfo() {
   const cred = auth.currentUser || (await signInAnonymously(auth)).user;
   myUid = cred.uid; lastSent = null; sentCount = 0;
   const base = ref(db, "stations/" + myUid);
   await set(ref(db, `stations/${myUid}/info`), { name: ($("name").value.trim() || "이름 없음").slice(0, 24), lat: myPos.lat, lon: myPos.lon,
-    sensor: "폰", noise: !!noise });
+    sensor: "폰", noise: !!noise, loc: "gps", bld: bldLabel() });
   await set(ref(db, `stations/${myUid}/online`), true);
   onDisconnect(ref(db, `stations/${myUid}/online`)).set(false);
   return base;
@@ -239,6 +288,7 @@ function second() {
   if (calib !== null && total - calib >= 30 * FS) {
     const r = computeIMM(null);
     if (r) { noise = r.A; ls.set("immSiteNoise", JSON.stringify(noise)); if (myUid) update(ref(db, `stations/${myUid}/info`), { noise: true }); }
+    // 잡음 바닥은 지금 보정 설정(층수 보정 포함) 그대로 잰 값이에요
     calib = null; $("cal").disabled = false;
   }
   const r = computeIMM(calib !== null ? null : noise);
@@ -259,19 +309,21 @@ async function startSensor() {
     if (n && calib === null) $("status").textContent = `센서 ${n} Hz 수신, 계급이 바뀔 때만 올리는 중 (지금까지 ${sentCount}회)` + (noise ? "" : ". 잡음 측정 전이라 값이 부풀 수 있어요");
     if (calib !== null) $("status").textContent = `잡음 측정 중… ${Math.max(0, Math.ceil(30 - (total - calib) / FS))}초 남음. 움직이지 말아 주세요`;
   }, 1000);
-  $("cal").disabled = false;
+  $("cal").disabled = false; $("t1Measure").disabled = false;
   return true;
 }
 function stop() {
   clearInterval(timer); timer = null;
   if (sensorOn) { window.removeEventListener("devicemotion", onMotion); sensorOn = false; }
   running = null; calib = null;
-  $("go").textContent = "참여 시작"; $("go").classList.add("primary"); $("cal").disabled = true;
+  $("go").textContent = "참여 시작"; $("go").classList.add("primary"); $("cal").disabled = true; $("t1Measure").disabled = true;
   if (myUid) set(ref(db, `stations/${myUid}/online`), false).catch(() => {});
 }
 $("go").addEventListener("click", async () => {
   if (running) { stop(); $("status").textContent = "멈췄어요. 지도에서는 회색으로 바뀌어요."; return; }
-  if (!myPos) { $("status").textContent = "먼저 위치를 정해 주세요 (현재 위치 또는 지도에서 찍기)."; return; }
+  $("status").textContent = "현재 위치를 확인하는 중이에요…";
+  try { const c = await getMyPosition(); setPos(c.latitude, c.longitude); map.setView([myPos.lat, myPos.lon], 11); }
+  catch (e) { $("status").textContent = e.message; return; }
   running = "sensor";
   try { await publishInfo(); }
   catch (e) { running = null; $("status").textContent = "참여 등록 실패: " + (e.code || e.message) + ". 설정을 확인해 주세요."; return; }
