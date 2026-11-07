@@ -46,15 +46,38 @@ function pushRaw(t, x, y, z) {   // 25 Hz 저역통과 후 20 ms 구간 평균�
     for (let c = 0; c < 3; c++) BUF[c][wi] = o[c]; wi = (wi + 1) % W; total++; lastOut = o; binSum = [0, 0, 0]; binN = 0; nextT += 1 / FS; }
   for (let c = 0; c < 3; c++) binSum[c] += lp2[c]; binN++;
 }
+/* I 안의 5단계: 상한 0.05, 0.1, 0.2, 0.4, 0.69 gal. 이름은 모두 I, 색은 무채색 명도 100·85·70·55·40%.
+   소수 진도는 0.50~1.49를 0.2씩 나누고, 1단계(0~0.05 gal)는 직선, 2~5단계는 로그로 채운다. */
+const I_SUB = [0.05, 0.1, 0.2, 0.4];   // 다섯 번째 상한은 II 하한(LOW[1])
+const I_COLORS = ["#ffffff", "#d9d9d9", "#b3b3b3", "#8c8c8c", "#666666"];
 function levelFrac(v) {
   if (!(v > 0)) return 0.5;
   let idx = 0; for (let i = 1; i < LOW.length; i++) if (v >= LOW[i]) idx = i;
-  if (idx === 0) return 0.5 + Math.min(v / LOW[1], 1) * 0.999;
+  if (idx === 0) {
+    if (v < I_SUB[0]) return 0.5 + 0.2 * v / I_SUB[0];
+    const ub = [...I_SUB, LOW[1]];
+    let j = 1; while (j < 4 && v >= ub[j]) j++;
+    return 0.5 + 0.2 * j + 0.2 * Math.log(v / ub[j - 1]) / Math.log(ub[j] / ub[j - 1]);
+  }
   const n = LOW.length - 1;
   if (idx >= n) return Math.min(n + 0.5 + Math.log(v / LOW[n]) / Math.log(LOW[n] / LOW[n - 1]), n + 1.49);
   return idx + 0.5 + Math.log(v / LOW[idx]) / Math.log(LOW[idx + 1] / LOW[idx]);
 }
 function classOf(f) { return Math.max(0, Math.min(9, Math.round(f) - 1)); }
+function iSubOf(f) { return Math.max(1, Math.min(5, Math.floor((f - 0.5) / 0.2 + 1e-9) + 1)); }   // I 안의 단계 1~5
+// 소수 진도 → 칩 색과 글자색
+function colorOf(f) {
+  const c = classOf(f);
+  if (c === 0) { const s = iSubOf(f); return { bg: I_COLORS[s - 1], light: s === 5 }; }
+  return { bg: MMI_COLORS[c], light: c >= 8 };
+}
+// 공유 코드: 0 = 잡음 이하, 1~5 = I의 1~5단계, 6~14 = II~X+
+function codeOf(f) { if (!(f > 0)) return 0; const c = classOf(f); return c === 0 ? iSubOf(f) : c + 5; }
+function codeInfo(k) {
+  if (!(k > 0)) return null;
+  if (k <= 5) return { name: "I", bg: I_COLORS[k - 1], light: k === 5, sub: k };
+  const c = Math.min(9, k - 5); return { name: CLASSES[c], bg: MMI_COLORS[c], light: c >= 8 };
+}
 function fmtFrac(v) { return (Math.floor(v * 100 + 1e-9) / 100).toFixed(2); }
 
 const R1 = new Float64Array(N), I1 = new Float64Array(N), R2 = new Float64Array(N), I2 = new Float64Array(N);
