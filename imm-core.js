@@ -101,16 +101,3 @@ function computeIMM(noise) {
   });
   return { A, v: [...ranges, lv[best]], T: lv[best] > 0 ? TS[best] : 0 };
 }
-
-/* CSV: 한 줄에 [시간, X, Y, Z] 또는 [X, Y, Z]. 숫자가 아닌 줄과 # 줄은 건너뜀 */
-function parseCsv(text, unit) {
-  const scale = unit === "ms2" ? 100 : unit === "g" ? 980.665 : 1, rows = [];
-  for (const line of text.split(/\r?\n/)) { const s = line.trim(); if (!s || s[0] === "#") continue;
-    const nums = s.split(/[,;\t ]+/).filter(p => p !== "").map(Number); if (nums.length < 3 || nums.some(v => !isFinite(v))) continue; rows.push(nums); }
-  if (rows.length < 10) throw new Error("숫자로 된 데이터 줄을 찾지 못했어요");
-  const useT = rows[0].length >= 4, off = useT ? 1 : 0, n = rows.length;
-  const t = new Float64Array(n), x = new Float64Array(n), y = new Float64Array(n), z = new Float64Array(n);
-  for (let i = 0; i < n; i++) { const r = rows[i]; t[i] = useT ? r[0] : i / 100; x[i] = r[off] * scale; y[i] = r[off + 1] * scale; z[i] = r[off + 2] * scale; }
-  if (useT) for (let i = 1; i < n; i++) if (!(t[i] > t[i - 1])) throw new Error(`${i + 1}번째 줄의 시간이 앞 줄보다 크지 않아요`);
-  return { t, x, y, z, n, dur: t[n - 1] - t[0] };
-}

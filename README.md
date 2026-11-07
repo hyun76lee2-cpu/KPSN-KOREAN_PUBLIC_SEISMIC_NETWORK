@@ -8,7 +8,7 @@
 
 | 파일 | 역할 |
 |---|---|
-| `index.html` | 지도, 관측소 목록, 폰 센서·CSV로 참여하기 |
+| `index.html` | 지도, 관측소 목록, 폰 센서로 참여하기 |
 | `imm-core.js` | IMM 계산 (IMM 진도계와 같은 방식) |
 | `firebase-config.js` | 내 Firebase 프로젝트 값 (직접 채움) |
 | `database.rules.json` | 데이터베이스 보안 규칙 |
@@ -34,9 +34,9 @@
 ## 3. 참여하기
 
 - **폰**: 사이트를 폰 브라우저로 열고 "내 관측소로 참여하기"에서 이름과 위치를 정한 뒤 참여 시작. 폰은 바닥에 테이프로 고정하고, 처음 한 번 조용할 때 잡음 측정(30초)을 해요. 아이폰은 시작할 때 동작 센서 권한을 물어봐요.
-- **CSV**: 입력을 "CSV 파형 재생"으로 바꾸고 `시간, X, Y, Z` 파일을 골라요.
 - **ADXL355 (컴퓨터)**: `pc/imm_share.example.json`을 `imm_share.json`으로 복사해 값을 채우고
   `python imm_live.py --serial COM5 --share imm_share.json`
+  CSV 재생(`--csv`)과 함께 쓰면 공유하지 않아요. 지도에는 실제 측정값만 올라가요.
   처음 실행할 때 익명 계정이 만들어지고 `imm_share_token.json`에 저장돼서, 다음에도 같은 관측소로 이어져요.
 
 ## 데이터와 개인정보

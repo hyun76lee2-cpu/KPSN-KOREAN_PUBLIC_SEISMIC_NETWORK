@@ -84,10 +84,6 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
           <div><label class="f">위치 (약 1 km 단위로 반올림해서 올려요)</label>
             <div class="row" style="margin-top:0"><button id="geo">현재 위치</button><button id="pick">지도에서 찍기</button></div>
             <div class="meta" id="posText">위치를 아직 정하지 않았어요</div></div>
-          <div><label class="f" for="src">입력</label><select id="src"><option value="sensor">폰 가속도 센서</option><option value="csv">CSV 파형 재생</option></select></div>
-          <div id="csvBox" style="display:none"><label class="f" for="file">CSV (시간, X, Y, Z)</label><input type="file" id="file" accept=".csv,.txt,text/csv,text/plain">
-            <div class="row" style="margin-top:4px"><select id="unit" aria-label="CSV 단위" style="width:auto"><option value="gal">gal</option><option value="ms2">m/s²</option><option value="g">g</option></select>
-            <select id="speed" aria-label="재생 속도" style="width:auto"><option value="1">실시간</option><option value="5">5배</option></select></div></div>
         </div>
         <div class="row">
           <button class="primary" id="go">참여 시작</button>
@@ -201,19 +197,18 @@ function render() {
 }
 
 /* ---------- 참여 ---------- */
-let myUid = null, running = null, timer = null, sensorOn = false, rawCount = 0, csv = null;
+let myUid = null, running = null, timer = null, sensorOn = false, rawCount = 0;
 let noise = null; try { const n = JSON.parse(ls.get("immSiteNoise") || "null"); if (Array.isArray(n) && n.length === NT) noise = n; } catch (e) {}
 let calib = null;
 $("name").value = ls.get("immSiteName") || "";
 $("name").addEventListener("change", () => ls.set("immSiteName", $("name").value.trim()));
-$("src").addEventListener("change", () => { $("csvBox").style.display = $("src").value === "csv" ? "" : "none"; });
 
 async function publishInfo() {
   const cred = auth.currentUser || (await signInAnonymously(auth)).user;
   myUid = cred.uid; lastSent = null; sentCount = 0;
   const base = ref(db, "stations/" + myUid);
   await set(ref(db, `stations/${myUid}/info`), { name: ($("name").value.trim() || "이름 없음").slice(0, 24), lat: myPos.lat, lon: myPos.lon,
-    sensor: running === "csv" ? "CSV 재생" : "폰", noise: !!noise });
+    sensor: "폰", noise: !!noise });
   await set(ref(db, `stations/${myUid}/online`), true);
   onDisconnect(ref(db, `stations/${myUid}/online`)).set(false);
   return base;
@@ -267,19 +262,6 @@ async function startSensor() {
   $("cal").disabled = false;
   return true;
 }
-function startCsv(d) {
-  resetBuf(); running = "csv"; let cur = 0, i = 0;
-  timer = setInterval(() => {
-    const upto = cur + 1;
-    while (i < d.n && d.t[i] - d.t[0] < upto) { pushRaw(1000 + d.t[i] - d.t[0], d.x[i], d.y[i], d.z[i]); i++; }
-    if (i >= d.n) for (let tt = Math.max(cur, d.dur) + 1 / FS; tt < upto; tt += 1 / FS) pushRaw(1000 + tt, d.x[d.n - 1], d.y[d.n - 1], d.z[d.n - 1]);
-    cur = upto;
-    const r = computeIMM(null);
-    if (r) { $("mine").innerHTML = vals(r.v, r.T); sendLive(r); }
-    $("status").textContent = `CSV 재생 중 ${Math.min(cur, d.dur).toFixed(0)} / ${d.dur.toFixed(0)}초, 계급이 바뀔 때만 올림 (${sentCount}회)`;
-    if (cur >= d.dur + 5) { stop(); $("status").textContent = "재생이 끝났어요."; }
-  }, 1000 / Number($("speed").value));
-}
 function stop() {
   clearInterval(timer); timer = null;
   if (sensorOn) { window.removeEventListener("devicemotion", onMotion); sensorOn = false; }
@@ -290,15 +272,10 @@ function stop() {
 $("go").addEventListener("click", async () => {
   if (running) { stop(); $("status").textContent = "멈췄어요. 지도에서는 회색으로 바뀌어요."; return; }
   if (!myPos) { $("status").textContent = "먼저 위치를 정해 주세요 (현재 위치 또는 지도에서 찍기)."; return; }
-  if ($("src").value === "csv") {
-    const f = $("file").files && $("file").files[0];
-    if (!f) { $("status").textContent = "CSV 파일을 먼저 골라 주세요."; return; }
-    try { csv = parseCsv(await f.text(), $("unit").value); } catch (e) { $("status").textContent = "읽지 못했어요: " + e.message; return; }
-    running = "csv";
-  } else running = "sensor";
+  running = "sensor";
   try { await publishInfo(); }
   catch (e) { running = null; $("status").textContent = "참여 등록 실패: " + (e.code || e.message) + ". 설정을 확인해 주세요."; return; }
-  if (running === "csv") startCsv(csv); else if (!(await startSensor())) return;
+  if (!(await startSensor())) return;
   $("go").textContent = "멈추기"; $("go").classList.remove("primary");
 });
 $("cal").addEventListener("click", () => { if (running === "sensor") { calib = total; $("cal").disabled = true; } });
