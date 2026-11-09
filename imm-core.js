@@ -33,6 +33,9 @@ function fft(re, im, inv) {
 }
 
 const BUF = [new Float32Array(W), new Float32Array(W), new Float32Array(W)];
+const EVW = 120 * FS;   // 흔들림 기록용 최근 120초 (50 Hz)
+const EVB = [new Float32Array(EVW), new Float32Array(EVW), new Float32Array(EVW)];
+let evi = 0;
 let wi = 0, total = 0, nextT = null, lastRawT = 0, binSum = [0, 0, 0], binN = 0, lastOut = [0, 0, 0], lp1 = [0, 0, 0], lp2 = [0, 0, 0];
 const LP_TAU = 1 / (2 * Math.PI * 25);
 function resetBuf() { wi = 0; total = 0; nextT = null; lastRawT = 0; binN = 0; }
@@ -43,7 +46,7 @@ function pushRaw(t, x, y, z) {   // 25 Hz 저역통과 후 20 ms 구간 평균�
   for (let c = 0; c < 3; c++) { lp1[c] += al * (v[c] - lp1[c]); lp2[c] += al * (lp1[c] - lp2[c]); }
   lastRawT = t;
   while (t >= nextT) { const o = binN ? binSum.map(q => q / binN) : lastOut;
-    for (let c = 0; c < 3; c++) BUF[c][wi] = o[c]; wi = (wi + 1) % W; total++; lastOut = o; binSum = [0, 0, 0]; binN = 0; nextT += 1 / FS; }
+    for (let c = 0; c < 3; c++) { BUF[c][wi] = o[c]; EVB[c][evi] = o[c]; } wi = (wi + 1) % W; evi = (evi + 1) % EVW; total++; lastOut = o; binSum = [0, 0, 0]; binN = 0; nextT += 1 / FS; }
   for (let c = 0; c < 3; c++) binSum[c] += lp2[c]; binN++;
 }
 /* I 안의 5단계: 상한 0.05, 0.1, 0.2, 0.4, 0.69 gal. 이름은 모두 I, 색은 무채색 명도 100·85·70·55·40%.
@@ -175,4 +178,46 @@ function computeIMM(noise) {
     return f;
   });
   return { A, v: [...ranges, lv[best]], T: lv[best] > 0 ? TS[best] : 0 };
+}
+
+/* ===== 흔들림 기록 파형 압축 =====
+   최근 n개 표본(50 Hz)을 축마다 b칸으로 나눠 칸별 최솟값·최댓값만 남기고, μ-law 8비트로 줄인 뒤 deflate로 압축한다.
+   형식 v1: { v: 1, b: 칸 수, dur: 초, s: [축별 최대 |가속도| gal], z: 1(deflate) 또는 0, d: base64 }
+   바이트 순서: 축 X, Y, Z 각각 칸마다 [최솟값, 최댓값] (0~254, 127이 0) */
+const MU = 255;
+function muEnc(x) { const y = Math.sign(x) * Math.log1p(MU * Math.min(1, Math.abs(x))) / Math.log1p(MU); return Math.round(y * 127) + 127; }
+function muDec(q) { const y = (q - 127) / 127; return Math.sign(y) * (Math.pow(1 + MU, Math.abs(y)) - 1) / MU; }
+function recentRaw(n) {
+  n = Math.min(n, total, EVW);
+  return [0, 1, 2].map(c => { const a = new Float64Array(n); for (let k = 0; k < n; k++) a[k] = EVB[c][(evi - n + k + EVW) % EVW]; return a; });
+}
+function b64(bytes) { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); }
+function unb64(str) { const s = atob(str), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+async function pipeBytes(bytes, stream) { const r = new Blob([bytes]).stream().pipeThrough(stream); return new Uint8Array(await new Response(r).arrayBuffer()); }
+async function encodeWave(n, bins) {
+  const xs = recentRaw(n), len = xs[0].length, b = Math.min(bins || 600, len);
+  const out = new Uint8Array(6 * b), sc = [];
+  xs.forEach((a, c) => {
+    let st = 0, sx = 0, stt = 0, stx = 0; for (let k = 0; k < len; k++) { st += k; sx += a[k]; stt += k * k; stx += k * a[k]; }
+    const sl = (len * stx - st * sx) / (len * stt - st * st), ic = (sx - sl * st) / len;
+    let pk = 0; for (let k = 0; k < len; k++) { a[k] -= ic + sl * k; pk = Math.max(pk, Math.abs(a[k])); }   // 중력·기울기 성분 제거
+    pk = pk || 1e-6; sc.push(Number(pk.toPrecision(4)));
+    for (let j = 0; j < b; j++) {
+      const k0 = Math.floor(j * len / b), k1 = Math.max(k0 + 1, Math.floor((j + 1) * len / b));
+      let mn = Infinity, mx = -Infinity; for (let k = k0; k < k1; k++) { if (a[k] < mn) mn = a[k]; if (a[k] > mx) mx = a[k]; }
+      out[(c * b + j) * 2] = muEnc(mn / pk); out[(c * b + j) * 2 + 1] = muEnc(mx / pk);
+    }
+  });
+  let z = 0, data = out;
+  if (typeof CompressionStream !== "undefined") { try { data = await pipeBytes(out, new CompressionStream("deflate")); z = 1; } catch (e) { data = out; } }
+  return { v: 1, b, dur: Math.round(len / FS * 10) / 10, s: sc, z, d: b64(data) };
+}
+async function decodeWave(w) {
+  let bytes = unb64(w.d);
+  if (w.z) bytes = await pipeBytes(bytes, new DecompressionStream("deflate"));
+  return [0, 1, 2].map(c => {
+    const mn = new Float32Array(w.b), mx = new Float32Array(w.b);
+    for (let j = 0; j < w.b; j++) { mn[j] = muDec(bytes[(c * w.b + j) * 2]) * w.s[c]; mx[j] = muDec(bytes[(c * w.b + j) * 2 + 1]) * w.s[c]; }
+    return { mn, mx, peak: w.s[c] };
+  });
 }

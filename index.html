@@ -80,6 +80,14 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
 </header>
 <div id="map" role="region" aria-label="관측소 지도"></div>
 <main>
+  <section id="waveBox" hidden>
+    <div class="card">
+      <div class="h"><h2 style="margin:0" id="waveTitle">흔들림 기록 파형</h2><button id="waveClose">닫기</button></div>
+      <p class="meta" id="waveMeta" style="margin:4px 0 8px"></p>
+      <canvas id="waveCanvas" style="width:100%; height:300px; display:block" role="img" aria-label="3축 가속도 파형"></canvas>
+    </div>
+  </section>
+
   <section>
     <h2>관측소 <span class="meta" id="count"></span></h2>
     <div class="row" style="margin:0 0 10px">
@@ -112,6 +120,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
         <div class="row">
           <button class="primary" id="go">참여 시작</button>
           <button id="cal" disabled>잡음 측정 (30초)</button>
+          <button id="calReset">잡음 측정 초기화</button>
         </div>
         <p class="note" id="status">참여하면 관측소 이름, 대략적 위치, 1초 IMM 값이 누구에게나 공개돼요. 폰은 바닥에 테이프로 고정하고, 처음 한 번 조용할 때 잡음 측정을 해 주세요. 참여 중에는 화면이 켜진 채로 유지되고, 이 탭을 계속 띄워 둬야 측정돼요.</p>
         <div class="vals" id="mine"></div>
@@ -119,7 +128,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
     </details>
   </section>
 
-  <footer>계급(I은 5단계)이 바뀔 때만 그 값을 올려요. I은 이름은 같고 밝은 회색일수록 약한 단계예요. 층수 보정을 켠 관측소는 건물 증폭을 뺀 지반 추정값이에요. 값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 2분 30초 넘게 신호가 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
+  <footer>계급(I은 5단계)이 바뀔 때만 그 값을 올려요. 대표 IMM이 III 이상이면 앞 15초부터 3축 파형을 기록해 약 3 KB로 압축해 올리고, 관측소마다 최근 5개만 남겨요. I은 이름은 같고 밝은 회색일수록 약한 단계예요. 층수 보정을 켠 관측소는 건물 증폭을 뺀 지반 추정값이에요. 값: IMM_(0.2,0.5) · IMM_(0.5,1.5) · IMM_(1.5,7.5) · 대표 IMM(0.1~10초 최댓값). 2분 30초 넘게 신호가 없는 관측소는 회색으로, 하루 넘게 없으면 숨겨요. 지도 © OpenStreetMap 기여자.</footer>
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -128,7 +137,7 @@ footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
 import { FIREBASE_CONFIG } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getDatabase, ref, onValue, set, update, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getDatabase, ref, onValue, set, update, get, remove, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const $ = id => document.getElementById(id);
 const app = initializeApp(FIREBASE_CONFIG);
@@ -213,7 +222,7 @@ function render() {
       const offFor = Math.max(0, age - (s.online === false ? 0 : LIVE_MS));
       if (offFor >= Number($("hideAfter").value)) continue;
     }
-    items.push({ id, info, c: liveCodes(live), T: live.T, age, isLive });
+    items.push({ id, info, c: liveCodes(live), T: live.T, age, isLive, ev: s.ev });
   }
   items.sort((a, b) => (b.isLive - a.isLive) || ((cAt(b.c, 3) || 0) - (cAt(a.c, 3) || 0)));
   $("count").textContent = items.length ? `(${items.filter(i => i.isLive).length}곳 실시간 / ${items.length}곳)` : "";
@@ -229,11 +238,55 @@ function render() {
     else { m.setLatLng([it.info.lat, it.info.lon]); m.setStyle({ fillColor: color, radius: it.isLive ? 9 : 6 }); m.setTooltipContent(tip); }
     const card = document.createElement("div"); card.className = "card";
     card.innerHTML = `<div class="h"><span class="name"><span class="dot${it.isLive ? " live" : ""}"></span>${esc(it.info.name || "이름 없음")}${it.id === myUid ? " (나)" : ""}</span>
-      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.bld ? " · 지반 추정 (" + esc(it.info.bld) + ")" : ""}${locOf(it.info) === "manual" ? " · 직접 입력 위치" : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${valsC(it.c, it.T)}</div>`;
-    card.addEventListener("click", () => map.setView([it.info.lat, it.info.lon], Math.max(map.getZoom(), 10)));
+      <span class="meta">${it.isLive ? "실시간" : ago(it.age)}${it.info.sensor ? " · " + esc(it.info.sensor) : ""}${it.info.bld ? " · 지반 추정 (" + esc(it.info.bld) + ")" : ""}${locOf(it.info) === "manual" ? " · 직접 입력 위치" : ""}${it.info.noise === false ? " · 잡음 미측정" : ""}</span></div><div class="vals">${valsC(it.c, it.T)}</div>` +
+      (it.ev && it.ev.id ? `<div class="row" style="margin-top:6px"><span class="meta">최근 흔들림 기록 ${new Date(it.ev.t).toLocaleString("ko-KR")} · 대표 ${codeInfo(it.ev.k) ? codeInfo(it.ev.k).name : "–"}</span><button class="wv" data-uid="${esc(it.id)}" data-ev="${esc(it.ev.id)}" data-name="${esc(it.info.name || "")}">파형 보기</button></div>` : "");
+    card.addEventListener("click", e => {
+      const b = e.target.closest("button.wv");
+      if (b) { showWave(b.dataset.uid, b.dataset.ev, b.dataset.name); return; }
+      map.setView([it.info.lat, it.info.lon], Math.max(map.getZoom(), 10));
+    });
     list.appendChild(card);
   }
   for (const [id, m] of markers) if (!seen.has(id)) { map.removeLayer(m); markers.delete(id); }
+}
+
+/* ---------- 흔들림 기록 파형 보기 (누를 때만 내려받음) ---------- */
+$("waveClose").addEventListener("click", () => { $("waveBox").hidden = true; });
+async function showWave(uid, evId, name) {
+  $("waveBox").hidden = false; $("waveTitle").textContent = `${name || "관측소"} 흔들림 기록`;
+  $("waveMeta").textContent = "불러오는 중…"; $("waveBox").scrollIntoView({ behavior: "smooth" });
+  try {
+    const snap = await get(ref(db, `waves/${uid}/${evId}`));
+    if (!snap.exists()) { $("waveMeta").textContent = "파형을 찾지 못했어요 (오래돼서 지워졌을 수 있어요)."; return; }
+    const w = snap.val(), axes = await decodeWave(w);
+    const ci = codeInfo(w.k);
+    $("waveMeta").textContent = `${new Date(w.t).toLocaleString("ko-KR")}부터 ${w.dur}초 · 대표 IMM ${ci ? ci.name : "–"}${w.T ? " @" + w.T + "초" : ""} · 축별 최대 X ${w.s[0]}, Y ${w.s[1]}, Z ${w.s[2]} gal · 받은 크기 ${(JSON.stringify(w).length / 1024).toFixed(1)} KB`;
+    drawWave(axes, w.dur);
+  } catch (e) { $("waveMeta").textContent = "파형을 불러오지 못했어요: " + (e.message || e); }
+}
+function drawWave(axes, dur) {
+  const cv = $("waveCanvas"), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const ink = css("--ink"), muted = css("--muted"), line = css("--line");
+  const L = 34, R = 8, Tp = 6, B = 20, W = r.width - L - R, rowH = (r.height - Tp - B) / 3;
+  const top = Math.max(...axes.map(a => a.peak)) * 1.05 || 1;
+  ctx.font = "11px sans-serif";
+  axes.forEach((a, c) => {
+    const y0 = Tp + rowH * c + rowH / 2, sy = (rowH / 2 - 4) / top, b = a.mn.length;
+    ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(L, y0); ctx.lineTo(L + W, y0); ctx.stroke();
+    ctx.fillStyle = muted; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(["X", "Y", "Z"][c], L - 8, y0);
+    ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(`최대 ${a.peak} gal`, L + 4, Tp + rowH * c + 2);
+    ctx.fillStyle = ink;
+    for (let j = 0; j < b; j++) {
+      const x = L + (j + 0.5) * W / b, ya = y0 - a.mx[j] * sy, yb = y0 - a.mn[j] * sy;
+      ctx.fillRect(x - Math.max(0.5, W / b / 2), ya, Math.max(1, W / b), Math.max(1, yb - ya));
+    }
+  });
+  ctx.fillStyle = muted; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const step = dur > 60 ? 20 : 10;
+  for (let t = 0; t <= dur; t += step) ctx.fillText(t + "초", L + t / dur * W, r.height - B + 4);
 }
 
 /* ---------- 참여 ---------- */
@@ -310,7 +363,31 @@ function second() {
   const r = computeIMM(calib !== null ? null : noise);
   if (!r) { $("status").textContent = `데이터를 모으는 중이에요 (${Math.max(0, Math.ceil(5 - total / FS))}초)`; return; }
   $("mine").innerHTML = vals(r.v, r.T);
-  if (calib === null) sendLive(r);
+  if (calib === null) { sendLive(r); trackEvent(r); }
+}
+const EV_FROM = 2.5, EV_PRE = 15, EV_QUIET = 15, EV_MAX = 100, EV_KEEP = 5;
+let ev = null, evSending = false;
+function trackEvent(r) {
+  if (!myUid) return;
+  const strong = r.v[3] >= EV_FROM;
+  if (!ev) { if (strong) ev = { start: total - EV_PRE * FS, at: Date.now() + offset - EV_PRE * 1000, k: codeOf(r.v[3]), T: r.T, quiet: 0 }; return; }
+  if (strong) { ev.quiet = 0; const k = codeOf(r.v[3]); if (k > ev.k) { ev.k = k; ev.T = r.T; } } else ev.quiet++;
+  if (ev.quiet >= EV_QUIET || total - ev.start >= EV_MAX * FS) { const done = ev; ev = null; uploadEvent(done); }
+}
+async function uploadEvent(e) {
+  if (evSending || !myUid) return;
+  evSending = true;
+  try {
+    const w = await encodeWave(Math.min(total - e.start, EVW), 400);
+    const id = String(Math.round(e.at)), T = Math.round(e.T * 100) / 100;
+    await set(ref(db, `waves/${myUid}/${id}`), { ...w, t: Math.round(e.at), k: e.k, T });
+    await update(ref(db, `stations/${myUid}`), { ev: { id, t: Math.round(e.at), k: e.k, T } });
+    const all = await get(ref(db, `waves/${myUid}`));   // 최근 5개만 남김
+    const ids = Object.keys(all.val() || {}).sort();
+    for (const old of ids.slice(0, Math.max(0, ids.length - EV_KEEP))) await remove(ref(db, `waves/${myUid}/${old}`));
+    $("status").textContent = `흔들림 기록을 올렸어요 (${(JSON.stringify(w).length / 1024).toFixed(1)} KB).`;
+  } catch (err) { $("status").textContent = "흔들림 기록 올리기 실패: " + (err.code || err.message); }
+  evSending = false;
 }
 /* 참여 중에는 화면이 꺼지지 않게 한다 (화면이 꺼지면 브라우저가 센서 값을 멈춘다) */
 let wakeLock = null;
@@ -362,6 +439,12 @@ $("go").addEventListener("click", async () => {
   $("go").textContent = "멈추기"; $("go").classList.remove("primary");
 });
 $("cal").addEventListener("click", () => { if (running === "sensor") { calib = total; $("cal").disabled = true; } });
+$("calReset").addEventListener("click", () => {
+  noise = null; calib = null; ls.set("immSiteNoise", "null");
+  if (running) $("cal").disabled = false;
+  if (myUid) update(ref(db, `stations/${myUid}/info`), { noise: false }).catch(() => {});
+  $("status").textContent = "잡음 측정값을 지웠어요. 조용할 때 다시 잡음 측정을 해 주세요.";
+});
 </script>
 </body>
 </html>
